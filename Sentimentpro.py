@@ -1,150 +1,127 @@
-#!/usr/bin/env python
-# coding: utf-8
-
-# In[ ]:
-
-
 import cv2
-from keras.models import model_from_json
+from deepface import DeepFace  # Using DeepFace for emotion recognition
+import random
 import numpy as np
-from nltk.sentiment import SentimentIntensityAnalyzer
-import pygame
-import time
-from sklearn.metrics import roc_curve, auc
-import matplotlib.pyplot as plt
+import pygame  # For playing songs
 
-# Initialize Pygame for music playback
-pygame.init()
-
-# Load your music files
-happy_music = "happy.mp3"
-animal_music = "an.mp3"
-
-# Load model
-json_file = open("facialemotionmodel.json", "r")
-model_json = json_file.read()
-json_file.close()
-model = model_from_json(model_json)
-model.load_weights("facialemotionmodel.h5")
-
-# Initialize Haar cascade for face detection
+# Load Haar Cascade for face detection
 haar_file = cv2.data.haarcascades + 'haarcascade_frontalface_default.xml'
 face_cascade = cv2.CascadeClassifier(haar_file)
 
-# Define feature extraction
-def extract_features(image):
-    feature = np.array(image)
-    feature = feature.reshape((1, 48, 48, 1))
-    return feature / 255.0
+# Initialize pygame mixer for playing music
+pygame.mixer.init()
 
-# Initialize Sentiment Intensity Analyzer
-sia = SentimentIntensityAnalyzer()
+# PSO parameters
+class Particle:
+    def _init_(self, dim):
+        self.position = np.random.uniform(-5, 5, dim)  # Random starting position
+        self.velocity = np.random.uniform(-1, 1, dim)  # Random velocity
+        self.best_position = self.position
+        self.best_value = float('inf')
+
+# Example PSO implementation for optimizing emotion detection process (hypothetically)
+def pso_optimizer(num_particles, max_iter):
+    dim = 2  # Let's say we optimize two parameters (just an example)
+    particles = [Particle(dim) for _ in range(num_particles)]
+    global_best_position = None
+    global_best_value = float('inf')
+
+    for _ in range(max_iter):
+        for particle in particles:
+            # Simple fitness function (you can replace this with your own logic)
+            fitness_value = np.sum(particle.position**2)  # Sum of squares as example
+
+            if fitness_value < particle.best_value:
+                particle.best_value = fitness_value
+                particle.best_position = particle.position
+
+            if fitness_value < global_best_value:
+                global_best_value = fitness_value
+                global_best_position = particle.position
+
+            # Update velocity and position
+            w = 0.5  # Inertia weight
+            c1 = 1.5  # Cognitive coefficient
+            c2 = 1.5  # Social coefficient
+            r1, r2 = np.random.rand(2)
+
+            particle.velocity = w * particle.velocity + c1 * r1 * (particle.best_position - particle.position) + c2 * r2 * (global_best_position - particle.position)
+            particle.position = particle.position + particle.velocity
+
+    return global_best_position  # Optimized parameters
 
 # Initialize webcam
 webcam = cv2.VideoCapture(0)
 
-# Emotion labels
-labels = {0: 'angry', 1: 'disgust', 2: 'fear', 3: 'happy', 4: 'neutral', 5: 'sad', 6: 'surprise'}
+# Run PSO optimization (example)
+best_params = pso_optimizer(num_particles=10, max_iter=10)
+print(f"Optimized Parameters: {best_params}")
 
-# Initialize music and emotion counts
-current_music = None
-emotion_counts = {'happy': 0, 'sad': 0, 'neutral': 0}
-
-# Initialize lists to store true labels and predicted scores
-true_labels = []
-predicted_scores = []
-
-# Hysteresis parameters
-neutral_hysteresis_duration = 5  # in seconds
-neutral_music_playing = False
-neutral_hysteresis_timer = time.time()
-music_duration = 30  # in seconds
-music_start_time = time.time()  # Initialize music_start_time
+# Initialize variables to manage song play state
+current_emotion = None
+song_playing = False
 
 while True:
-    i, im = webcam.read()
-    gray = cv2.cvtColor(im, cv2.COLOR_BGR2GRAY)
-    faces = face_cascade.detectMultiScale(im, 1.3, 5)
-    
+    ret, frame = webcam.read()
+    if not ret:
+        break
+
+    gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+    faces = face_cascade.detectMultiScale(gray, 1.3, 5)
+
     try:
-        # Reset emotion counts for each frame
-        emotion_counts = {'happy': 0, 'sad': 0, 'neutral': 0}
-        face_detected = False  # Assume no face is detected initially
-        
-        for (p, q, r, s) in faces:
-            face_detected = True
-            image = gray[q:q + s, p:p + r]
-            cv2.rectangle(im, (p, q), (p + r, q + s), (255, 0, 0), 2)
-            image = cv2.resize(image, (48, 48))
-            img = extract_features(image)
-            pred = model.predict(img)
-            prediction_label = labels[pred.argmax()]
-            
-            # Get sentiment scores for demonstration purposes
-            text_associated_with_image = "I'm feeling happy today!"
-            sentiment_scores = sia.polarity_scores(text_associated_with_image)
-            sentiment_label = 'Neutral'
-            if sentiment_scores['compound'] >= 0.05:
-                sentiment_label = 'Positive'
-            elif sentiment_scores['compound'] <= -0.05:
-                sentiment_label = 'Negative'
-            
-            # Update emotion counts
-            if prediction_label in emotion_counts:
-                emotion_counts[prediction_label] += 1
-                cv2.putText(im, f"{prediction_label}", (p - 10, q - 10), cv2.FONT_HERSHEY_COMPLEX_SMALL, 2, (0, 0, 255))
-        
-        total_emotion_count = sum(emotion_counts.values())
-        average_neutral_score = emotion_counts['neutral'] / total_emotion_count if total_emotion_count > 0 else 0
-        
-        # Decide music based on emotion detection
-        if emotion_counts['sad'] > 0 and emotion_counts['neutral'] == 0:
-            if current_music != 'sad':
-                pygame.mixer.music.load(happy_music)
-                pygame.mixer.music.play()
-                current_music = 'sad'
-                music_start_time = time.time()
-        
-        elif emotion_counts['neutral'] > 0:
-            if not neutral_music_playing and (time.time() - neutral_hysteresis_timer > neutral_hysteresis_duration):
-                if average_neutral_score >= 0.5:
-                    pygame.mixer.music.load(animal_music)
-                    pygame.mixer.music.play()
-                    current_music = 'neutral'
-                    neutral_music_playing = True
-                    music_start_time = time.time()
-        
-        # Stop the music if no face is detected or time exceeds music duration
-        if time.time() - music_start_time > music_duration or not face_detected:
-            pygame.mixer.music.stop()
-            neutral_music_playing = False
-            current_music = None
-        
-        # Update hysteresis timer for neutral emotion
-        if emotion_counts['neutral'] > 0:
-            neutral_hysteresis_timer = time.time()
-        
-        true_label = 1 if sentiment_label == 'Positive' else 0
-        true_labels.append(true_label)
-        predicted_scores.append(sentiment_scores['compound'])
-        
-        cv2.imshow("Output", im)
-        cv2.waitKey(27)
-    
+        # Assume no face is detected initially
+        face_detected = False
+
+        for (x, y, w, h) in faces:
+            face_detected = True  # Set to True if any face is detected
+            face = frame[y:y+h, x:x+w]
+            cv2.rectangle(frame, (x, y), (x+w, y+h), (255, 0, 0), 2)
+
+            # Use DeepFace to detect emotions
+            analysis = DeepFace.analyze(face, actions=['emotion'], enforce_detection=False)
+
+            if analysis:
+                # Ensure the emotions key exists
+                if 'emotion' in analysis[0]:
+                    emotions = analysis[0]['emotion']
+                    dominant_emotion = analysis[0]['dominant_emotion']
+
+                    # Only check for 'happy', 'sad', or 'neutral'
+                    if dominant_emotion in ['happy', 'sad', 'neutral']:
+                        # Display only the dominant emotion on the frame
+                        cv2.putText(frame, f"Emotion: {dominant_emotion}", 
+                                    (x, y-10), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 0, 255), 2)
+
+                        # If the emotion changes, stop the previous song
+                        if dominant_emotion != current_emotion:
+                            if current_emotion in ['neutral', 'sad']:
+                                pygame.mixer.music.stop()
+
+                            if dominant_emotion == 'sad':
+                                pygame.mixer.music.load('sentisad.mp3')  # Play the sad song
+                                pygame.mixer.music.play(-1)  # Loop the song
+                                song_playing = True
+                            elif dominant_emotion == 'neutral':
+                                pygame.mixer.music.load('sentihappy.mp3')  # Play the neutral song
+                                pygame.mixer.music.play(-1)  # Loop the song
+                                song_playing = True
+                            elif dominant_emotion == 'happy':
+                                song_playing = False  # No song needed for happy
+
+                            current_emotion = dominant_emotion
+
+        # Display the frame
+        cv2.imshow("Emotion Detection", frame)
+        if cv2.waitKey(1) & 0xFF == ord('q'):
+            break
+
     except cv2.error:
         pass
 
-# Calculate ROC curve and AUC
-fpr, tpr, thresholds = roc_curve(true_labels, predicted_scores)
-roc_auc = auc(fpr, tpr)
+# Release the webcam and close any OpenCV windows
+webcam.release()
+cv2.destroyAllWindows()
 
-# Plot ROC curve
-plt.figure()
-plt.plot(fpr, tpr, color='darkorange', lw=2, label=f'ROC curve (area = {roc_auc:.2f})')
-plt.plot([0, 1], [0, 1], color='navy', lw=2, linestyle='--')
-plt.xlabel('False Positive Rate')
-plt.ylabel('True Positive Rate')
-plt.title('Receiver Operating Characteristic Curve')
-plt.legend(loc="lower right")
-plt.show()
-
+# Stop any playing music before exiting
+pygame.mixer.music.stop()
